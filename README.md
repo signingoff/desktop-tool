@@ -1,5 +1,7 @@
 # Serenity — Supply Chain Chokepoint Analyst (Claude Code Skill)
 
+> 中文说明 → [README.zh-CN.md](README.zh-CN.md)
+
 A self-contained [Claude Code](https://claude.com/claude-code) skill that replicates the research process, voice, 7-step playbook, and risk discipline of X analyst **Serenity (@aleabitoreddit)** — an AI semiconductor / photonics / CPO / InP / Physical AI supply-chain analyst.
 
 The edge: *trading unknown bottlenecks* — mapping obscure chokepoints in the AI hardware stack (optical interconnects / CPO, upstream materials like InP / SOI / TFLN, precision components for Physical AI / robotics) where physical reality diverges from market narratives.
