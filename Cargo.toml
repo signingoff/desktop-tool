@@ -1,6 +1,6 @@
 [package]
 name = "sse-taskbar"
-version = "0.2.20"
+version = "0.2.23"
 edition = "2021"
 
 [dependencies]

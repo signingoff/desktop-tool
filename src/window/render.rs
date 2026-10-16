@@ -15,10 +15,10 @@ pub(super) const TRANSPARENT_KEY: u32 = 0x00010101;
 
 // Both placement and drawing use this same font and item padding.
 fn font_size(dpi: i32) -> i32 {
-    13 * dpi / 96
+    15 * dpi / 96
 }
 fn padding(dpi: i32) -> i32 {
-    (2 * dpi / 96).max(1)
+    (3 * dpi / 96).max(1)
 }
 
 struct SelectedFont {
@@ -42,7 +42,7 @@ impl SelectedFont {
             0,
             NONANTIALIASED_QUALITY as u32,
             0,
-            w!("Microsoft YaHei UI"),
+            w!("Arial"),
         );
         if font.is_null() {
             return None;

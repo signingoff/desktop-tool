@@ -28,7 +28,7 @@ pub fn place_widths(
     widths: &[i32],
     margin: i32,
 ) -> Option<Placement> {
-    if widths.len() < 2
+    if widths.is_empty()
         || widths.iter().any(|&w| w <= 0)
         || margin < 0
         || width <= margin.saturating_mul(2)
@@ -63,7 +63,7 @@ pub fn place_widths(
                 _ => false,
             })
             .count();
-        if visible >= 2 && best.is_none_or(|p: Placement| visible >= p.visible) {
+        if visible >= 1 && best.is_none_or(|p: Placement| visible >= p.visible) {
             let width = used;
             best = Some(Placement {
                 x: span.start - width,
@@ -89,14 +89,23 @@ pub fn page(start: usize, visible: usize, count: usize) -> Vec<usize> {
 mod tests {
     use super::*;
     #[test]
-    fn measured_widths_fit_tightly_and_keep_two_item_boundary() {
+    fn measured_widths_fit_one_or_more_items_at_exact_boundaries() {
         let widths = [83, 117, 91];
-        assert!(place_widths(215, &[], &widths, 8).is_none());
+        assert!(place_widths(98, &[], &widths, 8).is_none());
+        assert_eq!(place_widths(99, &[], &widths, 8).unwrap().visible, 1);
+        assert_eq!(place_widths(215, &[], &widths, 8).unwrap().visible, 1);
         let p = place_widths(216, &[], &widths, 8).unwrap();
         assert_eq!((p.x, p.width, p.visible), (8, 200, 2));
         assert_eq!(place_widths(307, &[], &widths, 8).unwrap().visible, 3);
         assert!(place_widths(400, &[], &[83, 0], 8).is_none());
-        assert!(place_widths(i32::MAX, &[], &[i32::MAX - 20, 100], 0).is_none());
+        assert_eq!(
+            place_widths(i32::MAX, &[], &[i32::MAX - 20, 100], 0)
+                .unwrap()
+                .visible,
+            1
+        );
+        assert_eq!(place_widths(99, &[], &[83], 8).unwrap().visible, 1);
+        assert!(place_widths(99, &[], &[], 8).is_none());
     }
     #[test]
     fn fits_all_or_scrolls_without_touching_controls() {
@@ -122,8 +131,9 @@ mod tests {
     }
     #[test]
     fn crowded_and_invalid_layouts_hide() {
-        // A gap that fits only one index must not produce a one-item ticker.
-        assert!(place(395, &[], 190, 5, 8).is_none());
+        assert!(place(205, &[], 190, 5, 8).is_none());
+        assert_eq!(place(206, &[], 190, 5, 8).unwrap().visible, 1);
+        assert_eq!(place(395, &[], 190, 5, 8).unwrap().visible, 1);
         assert_eq!(place(396, &[], 190, 5, 8).unwrap().visible, 2);
         assert!(place(800, &[Span { start: 0, end: 800 }], 190, 5, 8).is_none());
         assert!(place(

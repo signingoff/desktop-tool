@@ -31,7 +31,7 @@ use windows_sys::{
     },
 };
 
-const PAGE_INTERVAL: Duration = Duration::from_secs(5);
+const PAGE_INTERVAL: Duration = Duration::from_secs(15);
 const LAYOUT_DIRTY: u32 = WM_APP + 2;
 static CONTROLLER: AtomicUsize = AtomicUsize::new(0);
 
@@ -249,7 +249,7 @@ unsafe fn attach(ptr: *mut State) {
         &widths,
         8 * snapshot.dpi as i32 / 96,
     ) else {
-        hide(ptr, "任务栏空白不足两项，暂停显示");
+        hide(ptr, "任务栏空白不足一项，暂停显示");
         return;
     };
     let height = (40 * snapshot.dpi as i32 / 96).min(rect.bottom - rect.top);
@@ -331,7 +331,7 @@ unsafe fn attach(ptr: *mut State) {
             format!("任务栏内显示全部{count}项")
         } else {
             format!(
-                "任务栏内显示{}项 / 共{count}项 · 5秒轮播 · 滚轮切换",
+                "任务栏内显示{}项 / 共{count}项 · 15秒轮播 · 滚轮切换",
                 placement.visible
             )
         };
@@ -445,7 +445,7 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
     match msg {
         WM_TIMER => {
             tick(ptr);
-            (*ptr).tray.update(hwnd, &(*ptr).status);
+            (*ptr).tray.update(hwnd);
             0
         }
         WM_SETTINGCHANGE if input_setting(wp) => 0,

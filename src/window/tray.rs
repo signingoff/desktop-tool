@@ -18,7 +18,6 @@ pub(super) struct Tray {
     added: bool,
     version4: bool,
     next_update: Instant,
-    tooltip: String,
 }
 
 impl Tray {
@@ -27,7 +26,6 @@ impl Tray {
             added: false,
             version4: false,
             next_update: Instant::now(),
-            tooltip: String::new(),
         }
     }
 
@@ -37,13 +35,13 @@ impl Tray {
         self.next_update = Instant::now();
     }
 
-    pub(super) unsafe fn update(&mut self, hwnd: HWND, status: &str) {
+    pub(super) unsafe fn update(&mut self, hwnd: HWND) {
         if Instant::now() < self.next_update {
             return;
         }
         self.next_update = Instant::now() + RETRY_INTERVAL;
-        let tooltip = format!("指数行情\n{status}");
-        if self.added && self.tooltip == tooltip {
+        let tooltip = "指数行情";
+        if self.added {
             return;
         }
         let mut data = data(hwnd);
@@ -77,7 +75,6 @@ impl Tray {
             data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
             self.version4 = Shell_NotifyIconW(NIM_SETVERSION, &data) != 0;
         }
-        self.tooltip = tooltip;
     }
 
     pub(super) unsafe fn menu_position(
