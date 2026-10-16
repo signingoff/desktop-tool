@@ -20,7 +20,7 @@ A股显示上证、创业板、深成指、科创50、北证50；美股显示纳
 
 内置A股2026年、美股2026—2028年的休市和提前收市日。周末补班不视为股票交易日。未知年份按休市处理，避免用不完整日历误显示。**2027年A股使用前须更新日历。**
 
-可以在可执行文件同目录放置 `calendar.json` 覆盖内置日历，修改后重启程序；字段及格式见项目提供的文件。新增年份时同时补齐该年的休市日期，再加入对应的 `cn_years` / `us_years`。`us_early` 是美东13:00提前收市的日期。临时休市也需添加至日历。
+交易日历在编译时嵌入 EXE，运行时无需 `calendar.json`，也不会读取同目录的外部日历。后续日历更新通过新版 EXE 发布。源码中的 `calendar.json` 仅供构建使用；新增年份或临时休市时更新该文件并重新编译。
 
 日历来源：[上交所2026年休市安排](https://www.sse.com.cn/disclosure/dealinstruc/closed/)、[NYSE 2026—2028交易日历](https://www.nyse.com/trade/hours-calendars)。行情来源为腾讯公开HTTPS接口 `qt.gtimg.cn`，无需密钥；该接口无本项目可依赖的可用性或时效保证。
 
@@ -35,9 +35,9 @@ cargo test
 cargo build --release
 ```
 
-也可运行 `./build.ps1`，完成测试、Release构建并把exe和日历复制到 `dist`。当前工作区的便携编译工具仅保存在 `.tools`，未修改系统PATH。
+也可运行 `./build.ps1`，完成测试、Release构建并把exe和说明文件复制到 `dist`，发布包不包含外部日历。当前工作区的便携编译工具仅保存在 `.tools`，未修改系统PATH。
 
-产物为 `target\release\sse-taskbar.exe`，可单独运行（包含内置日历）。如果需要维护外部日历，把 `calendar.json` 放在exe旁。
+产物为 `target\release\sse-taskbar.exe`，可单独运行（包含内置日历）。
 
 ## 实现边界
 

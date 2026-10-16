@@ -22,15 +22,8 @@ pub struct Calendar {
 }
 impl Calendar {
     pub fn load() -> Result<Self, String> {
-        let path = std::env::current_exe()
-            .map_err(|e| e.to_string())?
-            .with_file_name("calendar.json");
-        let text = if path.exists() {
-            std::fs::read_to_string(path).map_err(|e| e.to_string())?
-        } else {
-            include_str!("../calendar.json").to_owned()
-        };
-        serde_json::from_str(&text).map_err(|e| format!("交易日历无效：{e}"))
+        serde_json::from_str(include_str!("../calendar.json"))
+            .map_err(|e| format!("内置交易日历无效：{e}"))
     }
     fn trading_day(&self, market: Market, date: NaiveDate) -> bool {
         if matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
@@ -71,7 +64,7 @@ impl Calendar {
 mod tests {
     use super::*;
     fn active(s: &str) -> Option<Session> {
-        let c: Calendar = serde_json::from_str(include_str!("../calendar.json")).unwrap();
+        let c = Calendar::load().unwrap();
         c.active(DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc))
     }
     #[test]

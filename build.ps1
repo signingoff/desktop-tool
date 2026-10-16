@@ -22,6 +22,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
 New-Item -ItemType Directory -Force dist | Out-Null
 Copy-Item -LiteralPath target\release\sse-taskbar.exe -Destination dist\sse-taskbar.exe
-Copy-Item -LiteralPath calendar.json,README.md -Destination dist
-Compress-Archive -Path dist\sse-taskbar.exe,dist\calendar.json,dist\README.md -DestinationPath dist\sse-taskbar-windows-x64.zip -Force
+Copy-Item -LiteralPath README.md -Destination dist
+if (Test-Path -LiteralPath dist\calendar.json) {
+    Remove-Item -LiteralPath dist\calendar.json
+}
+Compress-Archive -Path dist\sse-taskbar.exe,dist\README.md -DestinationPath dist\sse-taskbar-windows-x64.zip -Force
 Write-Output 'Ready: dist\sse-taskbar.exe'
