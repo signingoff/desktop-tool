@@ -28,7 +28,11 @@
 - `src/quote.rs`：行情请求、解析、日期及价格校验。
 - `src/layout.rs`：空白区域布局和轮播索引；保持为可独立测试的纯逻辑。
 - `src/taskbar.rs`：任务栏发现、UI Automation 空间检测、原生宿主识别和诊断。
-- `src/window.rs`：窗口生命周期、嵌入、绘制、托盘菜单、定时刷新和轮播。
+- `src/window.rs`：窗口生命周期、嵌入、消息协调和轮播。
+- `src/window/render.rs`：行情文字格式、统一字体与间距、文字测量和缓冲绘制。
+- `src/palette.rs`：白色圆角背景使用的固定红绿及状态文字配色。
+- `src/window/menu.rs`：原生右键退出菜单；`src/window/updates.rs`：行情工作线程和更新合并。
+- `src/startup.rs`：当前用户登录自启动项检查及路径更新。
 - `build.rs`、`app.manifest`：Windows 资源和兼容性清单；`assets/app.ico` 为图标资源，`assets/generate-icon.ps1` 为生成脚本。
 - `build.ps1`：测试、Release 构建及发布包生成。
 
