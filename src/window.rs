@@ -23,7 +23,8 @@ use windows_sys::{
     },
 };
 
-const PAGE_INTERVAL: Duration = Duration::from_millis(1500);
+const PAGE_INTERVAL: Duration = Duration::from_secs(5);
+const QUOTE_INTERVAL: Duration = Duration::from_secs(2);
 const TRAY: u32 = WM_APP + 1;
 const LAYOUT_DIRTY: u32 = WM_APP + 2;
 static CONTROLLER: AtomicUsize = AtomicUsize::new(0);
@@ -96,6 +97,7 @@ pub fn run() {
         std::thread::spawn(move || {
             let agent = quote::agent();
             loop {
+                let started = Instant::now();
                 if let Some(session) = worker_calendar.active(Utc::now()) {
                     let result = agent
                         .as_ref()
@@ -106,7 +108,7 @@ pub fn run() {
                     }
                 }
                 if matches!(
-                    wake.recv_timeout(Duration::from_secs(10)),
+                    wake.recv_timeout(QUOTE_INTERVAL.saturating_sub(started.elapsed())),
                     Err(mpsc::RecvTimeoutError::Disconnected)
                 ) {
                     break;
@@ -343,7 +345,7 @@ unsafe fn attach(ptr: *mut State) {
             format!("任务栏内显示全部{count}项")
         } else {
             format!(
-                "任务栏内显示{}项 / 共{count}项 · 1.5秒轮播 · 滚轮切换",
+                "任务栏内显示{}项 / 共{count}项 · 5秒轮播 · 滚轮切换",
                 placement.visible
             )
         };
@@ -401,7 +403,7 @@ unsafe fn menu(hwnd: HWND, ptr: *mut State) {
             DestroyWindow(hwnd);
         }
         4 => {
-            MessageBoxW(hwnd, w!("行情仅嵌入任务栏空白区域，不移动现有图标。\n空间不足时每1.5秒轮播，滚轮可切换。\nA股交易日09:30开始，收盘后保留至美股开盘。\n美股按美东09:30至16:00，提前收市日13:00结束。\n内置日历：A股2026；美股2026—2028。\n行情可能延迟，下方显示源行情时间。"), w!("指数行情"), MB_OK);
+            MessageBoxW(hwnd, w!("行情仅嵌入任务栏空白区域，不移动现有图标。\n每2秒请求行情；空间不足时每5秒轮播，滚轮可切换。\nA股交易日09:30开始，收盘后保留至美股开盘。\n美股按美东09:30至16:00，提前收市日13:00结束。\n内置日历：A股2026；美股2026—2028。\n行情可能延迟，下方显示源行情时间。"), w!("指数行情"), MB_OK);
         }
         _ => {}
     }
