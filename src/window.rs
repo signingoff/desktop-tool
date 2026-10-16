@@ -19,7 +19,7 @@ use windows_sys::{
         Foundation::*,
         Graphics::Gdi::*,
         System::LibraryLoader::GetModuleHandleW,
-        UI::{Accessibility::*, HiDpi::*, Shell::*, WindowsAndMessaging::*},
+        UI::{Accessibility::*, Controls::*, HiDpi::*, Shell::*, WindowsAndMessaging::*},
     },
 };
 
@@ -364,10 +364,19 @@ unsafe fn menu(hwnd: HWND, ptr: *mut State) {
         wide(&(*ptr).status).as_ptr(),
     );
     AppendMenuW(menu, MF_SEPARATOR, 0, null());
-    AppendMenuW(menu, MF_STRING, 1, w!("立即刷新"));
-    AppendMenuW(menu, MF_STRING, 2, w!("下一页行情"));
-    AppendMenuW(menu, MF_STRING, 4, w!("显示规则"));
-    AppendMenuW(menu, MF_STRING, 3, w!("退出"));
+    let dpi = (*ptr).snapshot.as_ref().map_or(96, |s| s.dpi);
+    for id in [1, 2, 4, 3] {
+        // Keep the native menu string for accessibility; only customize its paint.
+        AppendMenuW(menu, MF_STRING, id as usize, wide(menu_label(id)).as_ptr());
+        let info = MENUITEMINFOW {
+            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+            fMask: MIIM_FTYPE | MIIM_DATA,
+            fType: MFT_OWNERDRAW,
+            dwItemData: dpi as usize,
+            ..std::mem::zeroed()
+        };
+        SetMenuItemInfoW(menu, id, 0, &info);
+    }
     let mut point = std::mem::zeroed();
     GetCursorPos(&mut point);
     SetForegroundWindow(hwnd);
@@ -396,6 +405,54 @@ unsafe fn menu(hwnd: HWND, ptr: *mut State) {
         _ => {}
     }
 }
+fn menu_label(id: u32) -> &'static str {
+    match id {
+        1 => "立即刷新",
+        2 => "下一页行情",
+        4 => "显示规则",
+        3 => "退出",
+        _ => "",
+    }
+}
+
+unsafe fn draw_menu_item(item: &DRAWITEMSTRUCT) {
+    let saved = SaveDC(item.hDC);
+    let disabled = item.itemState & (ODS_DISABLED | ODS_GRAYED) != 0;
+    let selected = !disabled && item.itemState & ODS_SELECTED != 0;
+    // Native selection messages cover mouse hover, keyboard navigation and leave.
+    FillRect(
+        item.hDC,
+        &item.rcItem,
+        GetSysColorBrush(if selected {
+            COLOR_HIGHLIGHT
+        } else {
+            COLOR_MENU
+        }),
+    );
+    let color = GetSysColor(if disabled {
+        COLOR_GRAYTEXT
+    } else if selected {
+        COLOR_HIGHLIGHTTEXT
+    } else {
+        COLOR_MENUTEXT
+    });
+    let dpi = (item.itemData as i32).max(96);
+    let mut rect = item.rcItem;
+    rect.left += 12 * dpi / 96;
+    rect.right -= 12 * dpi / 96;
+    SetBkMode(item.hDC, TRANSPARENT as i32);
+    draw(
+        item.hDC,
+        menu_label(item.itemID),
+        14 * dpi / 96,
+        &mut rect,
+        color,
+    );
+    if saved != 0 {
+        RestoreDC(item.hDC, saved);
+    }
+}
+
 unsafe fn advance(ptr: *mut State, direction: i32) {
     if let Some(session) = (*ptr).session {
         let count = quote::indices(session.market).len();
@@ -419,6 +476,24 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
         return 0;
     }
     match msg {
+        WM_MEASUREITEM if lp != 0 => {
+            let item = &mut *(lp as *mut MEASUREITEMSTRUCT);
+            if item.CtlType != ODT_MENU {
+                return DefWindowProcW(hwnd, msg, wp, lp);
+            }
+            let dpi = (item.itemData as u32).max(96);
+            item.itemWidth = 140 * dpi / 96;
+            item.itemHeight = 32 * dpi / 96;
+            1
+        }
+        WM_DRAWITEM if lp != 0 => {
+            let item = &*(lp as *const DRAWITEMSTRUCT);
+            if item.CtlType != ODT_MENU {
+                return DefWindowProcW(hwnd, msg, wp, lp);
+            }
+            draw_menu_item(item);
+            1
+        }
         WM_TIMER => {
             let old_status = (*ptr).status.clone();
             let session = (*ptr).calendar.active(Utc::now());
