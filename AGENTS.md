@@ -31,10 +31,10 @@
 - `src/window.rs`：窗口生命周期、嵌入、消息协调和轮播。
 - `src/window/render.rs`：行情文字格式、统一字体与间距、文字测量和缓冲绘制。
 - `src/palette.rs`：白色圆角背景使用的固定红绿及状态文字配色。
-- `src/window/menu.rs`：原生右键退出菜单；`src/window/updates.rs`：行情工作线程和更新合并。
+- `src/window/menu.rs`、`src/window/tray.rs`：托盘图标及原生右键退出菜单；`src/window/updates.rs`：行情工作线程和更新合并。
 - `src/startup.rs`：当前用户登录自启动项检查及路径更新。
 - `build.rs`、`app.manifest`：Windows 资源和兼容性清单；`assets/app.ico` 为图标资源，`assets/generate-icon.ps1` 为生成脚本。
-- `build.ps1`：测试、Release 构建及发布包生成。
+- `build.ps1`：测试、Release 构建及单文件 EXE 输出。
 
 ## 实现要求
 
@@ -53,7 +53,7 @@
 ./build.ps1
 ```
 
-- 脚本执行 `cargo test --locked` 和 `cargo build --release --locked`，生成 `dist/sse-taskbar.exe` 与 `dist/sse-taskbar-windows-x64.zip`。发布包仅含 EXE 和说明文件。
+- 脚本执行 `cargo test --locked` 和 `cargo build --release --locked`，仅输出 `dist/sse-taskbar.exe`。不复制 README 或其他说明文件，不生成 ZIP。
 - 有本地 `.tools` 时，脚本配置便携 Rust、LLVM 工具和 LLD；不要擅自改为旧 GNU 链接器或修改系统 PATH。
 - 使用系统工具链时，GNU 需要 `windres`（可设置 `WINDRES`）；MSVC 需要 Windows SDK `rc.exe`（可设置 `RC`）及相应开发环境。
 - 纯文档修改只检查内容和差异，无需构建。代码修改执行相关检查；布局、日历、行情解析等行为变更优先补充有意义的边界用例，不为简单外观修改编写重复实现的测试。
@@ -65,7 +65,7 @@
 ## 版本、提交与交付
 
 - 发布新程序时同步修改 `Cargo.toml` 的项目版本、`Cargo.lock` 中仅本项目的版本和 `app.manifest` 的四段版本。禁止对锁文件做不加范围限制的版本字符串替换。
-- 构建后可复制通用 ZIP 为 `sse-taskbar-<版本>-windows-x64.zip`，确保说明文件与 EXE 对应；不把旧包当作新版本交付。
+- 交付构建后的 `dist/sse-taskbar.exe`，不生成通用或带版本号的 ZIP；不把旧 EXE 当作新版本交付。
 - 提交和推送需要用户授权；当前会话已有授权可继续使用，不能把过去授权当作所有未来任务的永久授权。
 - 提交前核对完整差异并执行 `git diff --check`，只暂存当前任务文件。纯文档修改不提高程序版本。
 - 不擅自 force push、清空远端、重写历史或恢复他人文件；历史上的清空远端请求不构成持续授权。需要新分支时默认使用 `codex/` 前缀。

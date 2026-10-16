@@ -1,5 +1,6 @@
 mod menu;
 mod render;
+mod tray;
 mod updates;
 
 use render::{paint, render, TRANSPARENT_KEY};
@@ -51,6 +52,7 @@ struct State {
     invalidated: Instant,
     status: String,
     taskbar_created: u32,
+    tray: tray::Tray,
 }
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
@@ -132,6 +134,7 @@ pub fn run() {
             invalidated: Instant::now(),
             status: "正在检测任务栏空白区域".into(),
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
+            tray: tray::Tray::new(),
         });
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
         CONTROLLER.store(hwnd as usize, Ordering::Relaxed);
@@ -159,13 +162,16 @@ pub fn run() {
 
 unsafe extern "system" fn layout_event(
     _: HWINEVENTHOOK,
-    _: u32,
+    event: u32,
     hwnd: HWND,
     _: i32,
     _: i32,
     _: u32,
     _: u32,
 ) {
+    if !affects_layout(event) {
+        return;
+    }
     let controller = CONTROLLER.load(Ordering::Relaxed) as HWND;
     if controller.is_null() || hwnd.is_null() {
         return;
@@ -174,6 +180,24 @@ unsafe extern "system" fn layout_event(
     if !bar.is_null() && (hwnd == bar || IsChild(bar, hwnd) != 0) {
         PostMessageW(controller, LAYOUT_DIRTY, 0, 0);
     }
+}
+
+fn affects_layout(event: u32) -> bool {
+    // Focus, selection and state notifications also fall inside the hook's
+    // numeric range. They do not invalidate the measured control boundaries.
+    matches!(
+        event,
+        EVENT_OBJECT_CREATE
+            | EVENT_OBJECT_DESTROY
+            | EVENT_OBJECT_SHOW
+            | EVENT_OBJECT_HIDE
+            | EVENT_OBJECT_REORDER
+            | EVENT_OBJECT_LOCATIONCHANGE
+    )
+}
+
+fn input_setting(action: WPARAM) -> bool {
+    matches!(action as u32, SPI_SETDEFAULTINPUTLANG | SPI_SETLANGTOGGLE)
 }
 
 unsafe fn hide(ptr: *mut State, reason: &str) {
@@ -412,27 +436,35 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
     if ptr.is_null() {
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
-    if msg == (*ptr).taskbar_created {
+    if (*ptr).taskbar_created != 0 && msg == (*ptr).taskbar_created {
         (*ptr).snapshot = None;
         (*ptr).invalidated = Instant::now();
+        (*ptr).tray.reset();
         return 0;
     }
     match msg {
         WM_TIMER => {
             tick(ptr);
+            (*ptr).tray.update(hwnd, &(*ptr).status);
             0
         }
+        WM_SETTINGCHANGE if input_setting(wp) => 0,
         LAYOUT_DIRTY | WM_DISPLAYCHANGE | WM_SETTINGCHANGE => {
             (*ptr).invalidated = Instant::now();
             hide(ptr, "任务栏布局变化，重新检测");
             0
         }
-        WM_CONTEXTMENU => {
-            menu::show(hwnd, lp);
+        tray::CALLBACK => {
+            // Release all State borrows before entering the menu's nested message loop.
+            let position = (*ptr).tray.menu_position(hwnd, wp, lp);
+            if let Some(position) = position {
+                menu::show(hwnd, position);
+            }
             0
         }
         WM_DESTROY => {
             KillTimer(hwnd, 1);
+            (*ptr).tray.remove(hwnd);
             (*ptr).stop.store(true, Ordering::Relaxed);
             if !(*ptr).child.is_null() && IsWindow((*ptr).child) != 0 {
                 DestroyWindow((*ptr).child);
@@ -443,6 +475,43 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
             0
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focus_and_selection_do_not_invalidate_layout() {
+        for event in [
+            EVENT_OBJECT_FOCUS,
+            EVENT_OBJECT_SELECTION,
+            EVENT_OBJECT_SELECTIONADD,
+            EVENT_OBJECT_SELECTIONREMOVE,
+            EVENT_OBJECT_SELECTIONWITHIN,
+            EVENT_OBJECT_STATECHANGE,
+        ] {
+            assert!(!affects_layout(event));
+        }
+        for event in [
+            EVENT_OBJECT_CREATE,
+            EVENT_OBJECT_DESTROY,
+            EVENT_OBJECT_SHOW,
+            EVENT_OBJECT_HIDE,
+            EVENT_OBJECT_REORDER,
+            EVENT_OBJECT_LOCATIONCHANGE,
+        ] {
+            assert!(affects_layout(event));
+        }
+    }
+
+    #[test]
+    fn input_language_settings_do_not_invalidate_layout() {
+        assert!(input_setting(SPI_SETDEFAULTINPUTLANG as WPARAM));
+        assert!(input_setting(SPI_SETLANGTOGGLE as WPARAM));
+        assert!(!input_setting(SPI_SETWORKAREA as WPARAM));
+        assert!(!input_setting(SPI_SETNONCLIENTMETRICS as WPARAM));
     }
 }
 
@@ -470,15 +539,8 @@ unsafe extern "system" fn child_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
             advance(ptr, if ((wp >> 16) as i16) > 0 { -1 } else { 1 });
             0
         }
-        WM_CONTEXTMENU => {
-            PostMessageW(
-                CONTROLLER.load(Ordering::Relaxed) as HWND,
-                WM_CONTEXTMENU,
-                0,
-                lp,
-            );
-            0
-        }
+        // Do not forward the quote's context menu to the Explorer parent.
+        WM_CONTEXTMENU => 0,
         WM_NCDESTROY => {
             if (*ptr).child == hwnd {
                 (*ptr).child = null_mut();
