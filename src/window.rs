@@ -57,7 +57,14 @@ unsafe fn tray(hwnd: HWND, operation: u32, status: &str) {
     data.uID = 1;
     data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     data.uCallbackMessage = TRAY;
-    data.hIcon = LoadIconW(null_mut(), IDI_APPLICATION);
+    data.hIcon = LoadImageW(
+        GetModuleHandleW(null()),
+        101usize as windows_sys::core::PCWSTR,
+        IMAGE_ICON,
+        GetSystemMetrics(SM_CXSMICON),
+        GetSystemMetrics(SM_CYSMICON),
+        LR_SHARED,
+    ) as HICON;
     let tip = wide(&format!("指数行情 · {status}"));
     let len = tip.len().min(data.szTip.len() - 1);
     data.szTip[..len].copy_from_slice(&tip[..len]);
@@ -118,6 +125,7 @@ pub fn run() {
                 hInstance: instance,
                 lpszClassName: name,
                 hCursor: LoadCursorW(null_mut(), IDC_ARROW),
+                hIcon: LoadIconW(instance, 101usize as windows_sys::core::PCWSTR),
                 ..std::mem::zeroed()
             };
             if RegisterClassW(&class) == 0 {
