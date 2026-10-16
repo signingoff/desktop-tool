@@ -11,6 +11,7 @@ pub struct Placement {
     pub visible: usize,
 }
 
+#[cfg(test)]
 pub fn place(
     width: i32,
     occupied: &[Span],
@@ -18,7 +19,20 @@ pub fn place(
     count: usize,
     margin: i32,
 ) -> Option<Placement> {
-    if cell <= 0 || count == 0 || margin < 0 || width <= margin.saturating_mul(2) {
+    place_widths(width, occupied, &vec![cell; count], margin)
+}
+
+pub fn place_widths(
+    width: i32,
+    occupied: &[Span],
+    widths: &[i32],
+    margin: i32,
+) -> Option<Placement> {
+    if widths.len() < 2
+        || widths.iter().any(|&w| w <= 0)
+        || margin < 0
+        || width <= margin.saturating_mul(2)
+    {
         return None;
     }
     let mut spans: Vec<_> = occupied
@@ -38,9 +52,19 @@ pub fn place(
     let mut best = None;
     for span in spans {
         let available = span.start - cursor;
-        let visible = ((available.max(0) / cell) as usize).min(count);
+        let mut used = 0i32;
+        let visible = widths
+            .iter()
+            .take_while(|&&w| match used.checked_add(w) {
+                Some(next) if next <= available => {
+                    used = next;
+                    true
+                }
+                _ => false,
+            })
+            .count();
         if visible >= 2 && best.is_none_or(|p: Placement| visible >= p.visible) {
-            let width = visible as i32 * cell;
+            let width = used;
             best = Some(Placement {
                 x: span.start - width,
                 width,
@@ -64,6 +88,16 @@ pub fn page(start: usize, visible: usize, count: usize) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn measured_widths_fit_tightly_and_keep_two_item_boundary() {
+        let widths = [83, 117, 91];
+        assert!(place_widths(215, &[], &widths, 8).is_none());
+        let p = place_widths(216, &[], &widths, 8).unwrap();
+        assert_eq!((p.x, p.width, p.visible), (8, 200, 2));
+        assert_eq!(place_widths(307, &[], &widths, 8).unwrap().visible, 3);
+        assert!(place_widths(400, &[], &[83, 0], 8).is_none());
+        assert!(place_widths(i32::MAX, &[], &[i32::MAX - 20, 100], 0).is_none());
+    }
     #[test]
     fn fits_all_or_scrolls_without_touching_controls() {
         let occupied = [

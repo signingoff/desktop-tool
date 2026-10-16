@@ -1,6 +1,6 @@
 use crate::{
     layout,
-    market::{Calendar, Market, Session},
+    market::{Calendar, Session},
     quote::{self, Quotes},
     taskbar::{self, Scan, Snapshot},
 };
@@ -19,13 +19,15 @@ use windows_sys::{
         Foundation::*,
         Graphics::Gdi::*,
         System::LibraryLoader::GetModuleHandleW,
-        UI::{Accessibility::*, Controls::*, HiDpi::*, Shell::*, WindowsAndMessaging::*},
+        UI::{Accessibility::*, HiDpi::*, WindowsAndMessaging::*},
     },
 };
 
 const PAGE_INTERVAL: Duration = Duration::from_secs(5);
 const QUOTE_INTERVAL: Duration = Duration::from_secs(2);
-const TRAY: u32 = WM_APP + 1;
+// Reserved background color; text is drawn without antialiasing against this key.
+const TRANSPARENT_KEY: u32 = 0x00010101;
+const EXIT_COMMAND: usize = 1;
 const LAYOUT_DIRTY: u32 = WM_APP + 2;
 static CONTROLLER: AtomicUsize = AtomicUsize::new(0);
 type Update = (Session, Result<Quotes, String>);
@@ -50,27 +52,6 @@ struct State {
 }
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
-}
-
-unsafe fn tray(hwnd: HWND, operation: u32, status: &str) {
-    let mut data: NOTIFYICONDATAW = std::mem::zeroed();
-    data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-    data.hWnd = hwnd;
-    data.uID = 1;
-    data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-    data.uCallbackMessage = TRAY;
-    data.hIcon = LoadImageW(
-        GetModuleHandleW(null()),
-        101usize as windows_sys::core::PCWSTR,
-        IMAGE_ICON,
-        GetSystemMetrics(SM_CXSMICON),
-        GetSystemMetrics(SM_CYSMICON),
-        LR_SHARED,
-    ) as HICON;
-    let tip = wide(&format!("指数行情 · {status}"));
-    let len = tip.len().min(data.szTip.len() - 1);
-    data.szTip[..len].copy_from_slice(&tip[..len]);
-    Shell_NotifyIconW(operation, &data);
 }
 
 pub fn run() {
@@ -175,7 +156,6 @@ pub fn run() {
         });
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
         CONTROLLER.store(hwnd as usize, Ordering::Relaxed);
-        tray(hwnd, NIM_ADD, "正在检测任务栏空白区域");
         let hook = SetWinEventHook(
             EVENT_OBJECT_CREATE,
             EVENT_OBJECT_LOCATIONCHANGE,
@@ -254,12 +234,28 @@ unsafe fn attach(ptr: *mut State) {
         return;
     }
     let count = quote::indices(session.market).len();
-    let cell = 190 * snapshot.dpi as i32 / 96;
-    let Some(placement) = layout::place(
+    let dpi = snapshot.dpi.max(96) as i32;
+    let dc = CreateCompatibleDC(null_mut());
+    if dc.is_null() {
+        hide(ptr, "无法测量行情文字宽度");
+        return;
+    }
+    let widths: Option<Vec<i32>> = layout::page((*ptr).page, count, count)
+        .into_iter()
+        .map(|i| {
+            let (text, _) = quote_line(&*ptr, session, i);
+            text_width(dc, &text, 13 * dpi / 96).map(|width| width + 2 * (2 * dpi / 96).max(1))
+        })
+        .collect();
+    DeleteDC(dc);
+    let Some(widths) = widths else {
+        hide(ptr, "无法测量行情文字宽度");
+        return;
+    };
+    let Some(placement) = layout::place_widths(
         rect.right - rect.left,
         &snapshot.occupied,
-        cell,
-        count,
+        &widths,
         8 * snapshot.dpi as i32 / 96,
     ) else {
         hide(ptr, "任务栏空白不足两项，暂停显示");
@@ -280,11 +276,9 @@ unsafe fn attach(ptr: *mut State) {
         }
     }
     if (*ptr).child.is_null() {
-        // XAML taskbars use composition surfaces. Give our child its own redirected
-        // surface; classic taskbars retain the existing GDI child path.
-        let layered = taskbar::has_composition_host(bar);
+        // Both classic and XAML hosts need a redirected child surface for transparency.
         (*ptr).child = CreateWindowExW(
-            WS_EX_NOACTIVATE | if layered { WS_EX_LAYERED } else { 0 },
+            WS_EX_NOACTIVATE | WS_EX_LAYERED,
             w!("IndexTaskbarChild"),
             w!("指数行情"),
             WS_CHILD | WS_CLIPSIBLINGS,
@@ -298,8 +292,7 @@ unsafe fn attach(ptr: *mut State) {
             ptr.cast(),
         );
         if !(*ptr).child.is_null()
-            && layered
-            && SetLayeredWindowAttributes((*ptr).child, 0, 255, LWA_ALPHA) == 0
+            && SetLayeredWindowAttributes((*ptr).child, TRANSPARENT_KEY, 255, LWA_COLORKEY) == 0
         {
             let error = GetLastError();
             DestroyWindow((*ptr).child);
@@ -312,6 +305,7 @@ unsafe fn attach(ptr: *mut State) {
         }
     }
     if !(*ptr).child.is_null() {
+        let visible_changed = (*ptr).visible != placement.visible;
         (*ptr).visible = placement.visible;
         let y = (rect.bottom - rect.top - height) / 2;
         let mut current: RECT = std::mem::zeroed();
@@ -340,6 +334,7 @@ unsafe fn attach(ptr: *mut State) {
                 }
                 return;
             }
+            InvalidateRect((*ptr).child, null(), 0);
         }
         (*ptr).status = if placement.visible == count {
             format!("任务栏内显示全部{count}项")
@@ -349,7 +344,9 @@ unsafe fn attach(ptr: *mut State) {
                 placement.visible
             )
         };
-        InvalidateRect((*ptr).child, null(), 0);
+        if visible_changed {
+            InvalidateRect((*ptr).child, null(), 0);
+        }
     } else {
         (*ptr).status = format!("嵌入失败（错误 {}）", GetLastError());
     }
@@ -358,30 +355,32 @@ unsafe fn attach(ptr: *mut State) {
     }
 }
 
-unsafe fn menu(hwnd: HWND, ptr: *mut State) {
+unsafe fn create_exit_menu() -> HMENU {
     let menu = CreatePopupMenu();
-    AppendMenuW(
-        menu,
-        MF_STRING | MF_DISABLED,
-        0,
-        wide(&(*ptr).status).as_ptr(),
-    );
-    AppendMenuW(menu, MF_SEPARATOR, 0, null());
-    let dpi = (*ptr).snapshot.as_ref().map_or(96, |s| s.dpi);
-    for id in [1, 2, 4, 3] {
-        // Keep the native menu string for accessibility; only customize its paint.
-        AppendMenuW(menu, MF_STRING, id as usize, wide(menu_label(id)).as_ptr());
-        let info = MENUITEMINFOW {
-            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
-            fMask: MIIM_FTYPE | MIIM_DATA,
-            fType: MFT_OWNERDRAW,
-            dwItemData: dpi as usize,
-            ..std::mem::zeroed()
-        };
-        SetMenuItemInfoW(menu, id, 0, &info);
+    if menu.is_null() {
+        return null_mut();
     }
-    let mut point = std::mem::zeroed();
-    GetCursorPos(&mut point);
+    // A native menu supplies hover/keyboard highlighting and accessibility.
+    if AppendMenuW(menu, MF_STRING, EXIT_COMMAND, w!("退出")) == 0 {
+        DestroyMenu(menu);
+        return null_mut();
+    }
+    menu
+}
+
+unsafe fn menu(hwnd: HWND, position: LPARAM) {
+    let menu = create_exit_menu();
+    if menu.is_null() {
+        return;
+    }
+    let mut point = POINT {
+        x: (position as u32 & 0xffff) as i16 as i32,
+        y: ((position as u32 >> 16) & 0xffff) as i16 as i32,
+    };
+    if position == -1 && GetCursorPos(&mut point) == 0 {
+        DestroyMenu(menu);
+        return;
+    }
     SetForegroundWindow(hwnd);
     let selected = TrackPopupMenu(
         menu,
@@ -393,74 +392,64 @@ unsafe fn menu(hwnd: HWND, ptr: *mut State) {
         null(),
     );
     DestroyMenu(menu);
-    PostMessageW(hwnd, WM_NULL, 0, 0);
-    match selected {
-        1 => {
-            let _ = (*ptr).refresh.try_send(());
+    // Menu tracking runs a nested message loop. Do not access State afterwards.
+    if IsWindow(hwnd) != 0 {
+        PostMessageW(hwnd, WM_NULL, 0, 0);
+        if selected == EXIT_COMMAND as i32 {
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
         }
-        2 => advance(ptr, 1),
-        3 => {
-            DestroyWindow(hwnd);
-        }
-        4 => {
-            MessageBoxW(hwnd, w!("行情仅嵌入任务栏空白区域，不移动现有图标。\n每2秒请求行情；空间不足时每5秒轮播，滚轮可切换。\nA股交易日09:30开始，收盘后保留至美股开盘。\n美股按美东09:30至16:00，提前收市日13:00结束。\n内置日历：A股2026；美股2026—2028。\n行情可能延迟，下方显示源行情时间。"), w!("指数行情"), MB_OK);
-        }
-        _ => {}
-    }
-}
-fn menu_label(id: u32) -> &'static str {
-    match id {
-        1 => "立即刷新",
-        2 => "下一页行情",
-        4 => "显示规则",
-        3 => "退出",
-        _ => "",
     }
 }
 
-unsafe fn draw_menu_item(item: &DRAWITEMSTRUCT) {
-    let saved = SaveDC(item.hDC);
-    let disabled = item.itemState & (ODS_DISABLED | ODS_GRAYED) != 0;
-    let selected = !disabled && item.itemState & ODS_SELECTED != 0;
-    // Native selection messages cover mouse hover, keyboard navigation and leave.
-    FillRect(
-        item.hDC,
-        &item.rcItem,
-        GetSysColorBrush(if selected {
-            COLOR_HIGHLIGHT
-        } else {
-            COLOR_MENU
-        }),
-    );
-    let color = GetSysColor(if disabled {
-        COLOR_GRAYTEXT
-    } else if selected {
-        COLOR_HIGHLIGHTTEXT
-    } else {
-        COLOR_MENUTEXT
-    });
-    let dpi = (item.itemData as i32).max(96);
-    let mut rect = item.rcItem;
-    rect.left += 12 * dpi / 96;
-    rect.right -= 12 * dpi / 96;
-    SetBkMode(item.hDC, TRANSPARENT as i32);
-    draw(
-        item.hDC,
-        menu_label(item.itemID),
-        14 * dpi / 96,
-        &mut rect,
-        color,
-    );
-    if saved != 0 {
-        RestoreDC(item.hDC, saved);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn measured_text_grows_with_content_and_dpi() {
+        unsafe {
+            let dc = CreateCompatibleDC(null_mut());
+            assert!(!dc.is_null());
+            let short = text_width(dc, "上证 1234.56 +1.23%", 13);
+            let long = text_width(dc, "上证 12345.67 +12.34% 旧", 13);
+            let scaled = text_width(dc, "上证 1234.56 +1.23%", 26);
+            DeleteDC(dc);
+            assert!(short.unwrap() > 0);
+            assert!(long.unwrap() > short.unwrap());
+            assert!(scaled.unwrap() > short.unwrap());
+        }
+    }
+
+    #[test]
+    fn context_menu_contains_only_enabled_exit() {
+        unsafe {
+            let menu = create_exit_menu();
+            assert!(!menu.is_null());
+            let count = GetMenuItemCount(menu);
+            let id = GetMenuItemID(menu, 0);
+            let state = GetMenuState(menu, 0, MF_BYPOSITION);
+            let mut label = [0u16; 16];
+            let len = GetMenuStringW(
+                menu,
+                0,
+                label.as_mut_ptr(),
+                label.len() as i32,
+                MF_BYPOSITION,
+            );
+            DestroyMenu(menu);
+            assert_eq!(count, 1);
+            assert_eq!(id, EXIT_COMMAND as u32);
+            assert_eq!(state & (MF_DISABLED | MF_GRAYED | MF_SEPARATOR), 0);
+            assert_eq!(String::from_utf16_lossy(&label[..len as usize]), "退出");
+        }
     }
 }
-
 unsafe fn advance(ptr: *mut State, direction: i32) {
     if let Some(session) = (*ptr).session {
         let count = quote::indices(session.market).len();
         (*ptr).page = ((*ptr).page as i32 + direction).rem_euclid(count as i32) as usize;
         (*ptr).next_page = Instant::now() + PAGE_INTERVAL;
+        attach(ptr);
         if !(*ptr).child.is_null() {
             InvalidateRect((*ptr).child, null(), 0);
         }
@@ -473,34 +462,16 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
     if msg == (*ptr).taskbar_created {
-        tray(hwnd, NIM_ADD, "任务栏重建，等待连接");
         (*ptr).snapshot = None;
         (*ptr).invalidated = Instant::now();
         return 0;
     }
     match msg {
-        WM_MEASUREITEM if lp != 0 => {
-            let item = &mut *(lp as *mut MEASUREITEMSTRUCT);
-            if item.CtlType != ODT_MENU {
-                return DefWindowProcW(hwnd, msg, wp, lp);
-            }
-            let dpi = (item.itemData as u32).max(96);
-            item.itemWidth = 140 * dpi / 96;
-            item.itemHeight = 32 * dpi / 96;
-            1
-        }
-        WM_DRAWITEM if lp != 0 => {
-            let item = &*(lp as *const DRAWITEMSTRUCT);
-            if item.CtlType != ODT_MENU {
-                return DefWindowProcW(hwnd, msg, wp, lp);
-            }
-            draw_menu_item(item);
-            1
-        }
         WM_TIMER => {
-            let old_status = (*ptr).status.clone();
+            let mut content_changed = false;
             let session = (*ptr).calendar.active(Utc::now());
             if session != (*ptr).session {
+                content_changed = true;
                 (*ptr).session = session;
                 (*ptr).quotes.clear();
                 (*ptr).error = None;
@@ -513,10 +484,14 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
                 }
                 match update {
                     Ok(q) => {
+                        content_changed |= (*ptr).quotes != q || (*ptr).error.is_some();
                         (*ptr).quotes = q;
                         (*ptr).error = None;
                     }
-                    Err(e) => (*ptr).error = Some(e),
+                    Err(e) => {
+                        content_changed |= (*ptr).error.as_ref() != Some(&e);
+                        (*ptr).error = Some(e);
+                    }
                 }
             }
             while let Ok(scan) = (*ptr).scans.try_recv() {
@@ -535,11 +510,15 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
                 {
                     advance(ptr, 1);
                 } else {
+                    content_changed |= (*ptr).page != 0;
                     (*ptr).page = 0;
                     (*ptr).next_page = Instant::now() + PAGE_INTERVAL;
                 }
             }
             attach(ptr);
+            if content_changed && !(*ptr).child.is_null() {
+                InvalidateRect((*ptr).child, null(), 0);
+            }
             // Expose the currently visible values to accessibility clients, too.
             if let Some(session) = (*ptr).session {
                 if !(*ptr).child.is_null() {
@@ -564,9 +543,6 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
                     }
                 }
             }
-            if old_status != (*ptr).status {
-                tray(hwnd, NIM_MODIFY, &(*ptr).status);
-            }
             0
         }
         LAYOUT_DIRTY | WM_DISPLAYCHANGE | WM_SETTINGCHANGE => {
@@ -574,19 +550,12 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
             hide(ptr, "任务栏布局变化，重新检测");
             0
         }
-        TRAY => {
-            if lp as u32 == WM_RBUTTONUP || lp as u32 == WM_LBUTTONUP {
-                menu(hwnd, ptr);
-            }
-            0
-        }
         WM_CONTEXTMENU => {
-            menu(hwnd, ptr);
+            menu(hwnd, lp);
             0
         }
         WM_DESTROY => {
             KillTimer(hwnd, 1);
-            tray(hwnd, NIM_DELETE, "");
             (*ptr).stop.store(true, Ordering::Relaxed);
             if !(*ptr).child.is_null() && IsWindow((*ptr).child) != 0 {
                 DestroyWindow((*ptr).child);
@@ -643,20 +612,66 @@ unsafe extern "system" fn child_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
 }
-unsafe fn draw(dc: HDC, text: &str, size: i32, rect: &mut RECT, color: u32) {
+unsafe fn text_width(dc: HDC, text: &str, size: i32) -> Option<i32> {
     let font = CreateFontW(
         -size,
         0,
         0,
         0,
-        400,
+        600,
         0,
         0,
         0,
         DEFAULT_CHARSET as u32,
         0,
         0,
-        CLEARTYPE_QUALITY as u32,
+        NONANTIALIASED_QUALITY as u32,
+        0,
+        w!("Microsoft YaHei UI"),
+    );
+    if font.is_null() {
+        return None;
+    }
+    let previous = SelectObject(dc, font);
+    if previous.is_null() || previous as isize == -1 {
+        DeleteObject(font);
+        return None;
+    }
+    let text = wide(text);
+    let mut rect: RECT = std::mem::zeroed();
+    let measured = DrawTextW(
+        dc,
+        text.as_ptr(),
+        text.len() as i32 - 1,
+        &mut rect,
+        DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX,
+    );
+    SelectObject(dc, previous);
+    DeleteObject(font);
+    (measured > 0 && rect.right > 0).then_some(rect.right)
+}
+
+unsafe fn draw(dc: HDC, text: &str, size: i32, rect: &mut RECT, color: u32) {
+    let ticker = GetBkColor(dc) == TRANSPARENT_KEY;
+    let font = CreateFontW(
+        -size,
+        0,
+        0,
+        0,
+        if ticker { 600 } else { 400 },
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET as u32,
+        0,
+        0,
+        // Color-key transparency cannot represent partially covered glyph pixels.
+        // Menu DCs keep ClearType; ticker text avoids colored fringes from the key.
+        if ticker {
+            NONANTIALIASED_QUALITY as u32
+        } else {
+            CLEARTYPE_QUALITY as u32
+        },
         0,
         w!("Microsoft YaHei UI"),
     );
@@ -676,92 +691,113 @@ unsafe fn draw(dc: HDC, text: &str, size: i32, rect: &mut RECT, color: u32) {
 unsafe fn paint(hwnd: HWND, state: &State) {
     let mut ps = std::mem::zeroed();
     let dc = BeginPaint(hwnd, &mut ps);
-    render(hwnd, dc, state);
+    let mut rect: RECT = std::mem::zeroed();
+    if !dc.is_null() && GetClientRect(hwnd, &mut rect) != 0 && rect.right > 0 && rect.bottom > 0 {
+        let buffer = CreateCompatibleDC(dc);
+        let bitmap = CreateCompatibleBitmap(dc, rect.right, rect.bottom);
+        if !buffer.is_null() && !bitmap.is_null() {
+            let previous = SelectObject(buffer, bitmap);
+            if !previous.is_null() && previous as isize != -1 {
+                render(hwnd, buffer, state);
+                // Publish the complete frame, never the intermediate cleared background.
+                if BitBlt(dc, 0, 0, rect.right, rect.bottom, buffer, 0, 0, SRCCOPY) == 0 {
+                    InvalidateRect(hwnd, null(), 0);
+                }
+                SelectObject(buffer, previous);
+            } else {
+                InvalidateRect(hwnd, null(), 0);
+            }
+        } else {
+            InvalidateRect(hwnd, null(), 0);
+        }
+        if !bitmap.is_null() {
+            DeleteObject(bitmap);
+        }
+        if !buffer.is_null() {
+            DeleteDC(buffer);
+        }
+    }
     EndPaint(hwnd, &ps);
 }
+fn quote_line(state: &State, session: Session, i: usize) -> (String, u32) {
+    let index = &quote::indices(session.market)[i];
+    let q = state.quotes.get(i).and_then(|q| q.as_ref().ok());
+    match q {
+        Some(q) => {
+            let color = if state.error.is_some() {
+                0x00909090
+            } else if q.percent > 0.0 {
+                0x00AAAAFF // RGB(255, 170, 170): brighter red on a dark taskbar.
+            } else if q.percent < 0.0 {
+                0x00A0F279 // RGB(121, 242, 160): brighter green on a dark taskbar.
+            } else {
+                0x00EEEEEE
+            };
+            (
+                format!(
+                    "{} {:.2} {:+.2}%{}",
+                    index.name,
+                    q.price,
+                    q.percent,
+                    if state.error.is_some() { " 旧" } else { "" }
+                ),
+                color,
+            )
+        }
+        None => (
+            format!(
+                "{} {}",
+                index.name,
+                state
+                    .error
+                    .clone()
+                    .or_else(|| state.quotes.get(i).and_then(|q| q.as_ref().err().cloned()))
+                    .unwrap_or("等待当天行情".into())
+            ),
+            0x00AAAAAA,
+        ),
+    }
+}
+
 unsafe fn render(hwnd: HWND, dc: HDC, state: &State) {
     let mut rect: RECT = std::mem::zeroed();
     GetClientRect(hwnd, &mut rect);
-    let brush = CreateSolidBrush(0x00202020);
-    FillRect(dc, &rect, brush);
-    DeleteObject(brush);
+    let saved = SaveDC(dc);
+    SetDCBrushColor(dc, TRANSPARENT_KEY);
+    FillRect(dc, &rect, GetStockObject(DC_BRUSH) as HBRUSH);
+    SetBkColor(dc, TRANSPARENT_KEY);
     SetBkMode(dc, TRANSPARENT as i32);
     if let Some(session) = state.session {
         let list = quote::indices(session.market);
         let visible = state.visible.max(1).min(list.len());
-        let cell = rect.right / visible as i32;
+        let mut left = 0;
         let dpi = GetDpiForWindow(hwnd).max(96) as i32;
-        // Compress text on smaller screens while preserving every index.
-        let scale = |n: i32| (n * dpi / 96).min(n * cell / 184).max(8);
-        for (slot, i) in layout::page(state.page, visible, list.len())
-            .into_iter()
-            .enumerate()
-        {
-            let index = &list[i];
-            let q = state.quotes.get(i).and_then(|q| q.as_ref().ok());
-            let (top, bottom, color) = match q {
-                Some(q) => {
-                    let color = if state.error.is_some() {
-                        0x00909090
-                    } else if q.percent > 0.0 {
-                        0x006B6BFF
-                    } else if q.percent < 0.0 {
-                        0x008FD35C
-                    } else {
-                        0x00EEEEEE
-                    };
-                    (
-                        format!("{}  {:.2}  {:+.2}%", index.name, q.price, q.percent),
-                        format!(
-                            "{} {}",
-                            if state.error.is_some() {
-                                "旧"
-                            } else if session.market == Market::Us {
-                                "美东"
-                            } else {
-                                "行情"
-                            },
-                            q.time.format("%m-%d %H:%M:%S")
-                        ),
-                        color,
-                    )
-                }
-                None => (
-                    format!("{}  --  --%", index.name),
-                    state
-                        .error
-                        .clone()
-                        .or_else(|| state.quotes.get(i).and_then(|q| q.as_ref().err().cloned()))
-                        .unwrap_or("等待当天行情".into()),
-                    0x00AAAAAA,
-                ),
+        // Match the measured widths used by placement; leave only a small gap.
+        let font_size = 13 * dpi / 96;
+        for i in layout::page(state.page, visible, list.len()) {
+            let (text, color) = quote_line(state, session, i);
+            let padding = (2 * dpi / 96).max(1);
+            let Some(width) = text_width(dc, &text, font_size) else {
+                break;
             };
-            let left = slot as i32 * cell + 5;
-            let right = (slot as i32 + 1) * cell - 4;
+            let right = left + width + 2 * padding;
+
             draw(
                 dc,
-                &top,
-                scale(13),
+                &text,
+                font_size,
                 &mut RECT {
-                    left,
+                    left: left + padding,
                     top: 0,
-                    right,
-                    bottom: rect.bottom * 3 / 5,
+                    right: right - padding,
+                    bottom: rect.bottom,
                 },
                 color,
             );
-            draw(
-                dc,
-                &bottom,
-                scale(10),
-                &mut RECT {
-                    left,
-                    top: rect.bottom * 3 / 5,
-                    right,
-                    bottom: rect.bottom,
-                },
-                0x00AAAAAA,
-            );
+            left = right;
         }
+    }
+    if saved != 0 {
+        RestoreDC(dc, saved);
     }
 }

@@ -48,7 +48,7 @@ pub fn indices(market: Market) -> &'static [Index] {
         Market::Us => US,
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Quote {
     pub price: f64,
     pub percent: f64,

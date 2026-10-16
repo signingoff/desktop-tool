@@ -46,7 +46,7 @@ public static class TestBar {
     var c=new Class { proc=callback, instance=GetModuleHandleW(null), name="Shell_TrayWnd" };
     if(RegisterClassW(ref c)==0) throw new Exception("RegisterClass failed");
     var h=CreateWindowExW(0,c.name,"IndexTaskbarMockHost",0x90000000,0,0,1280,48,IntPtr.Zero,IntPtr.Zero,c.instance,IntPtr.Zero);
-    CreateWindowExW(0,"Button","Existing app icons",0x50000000,0,0,300,48,h,IntPtr.Zero,c.instance,IntPtr.Zero);
+    CreateWindowExW(0,"Button","Existing app icons",0x50000000,0,0,400,48,h,IntPtr.Zero,c.instance,IntPtr.Zero);
     CreateWindowExW(0,"Button","Notification icons",0x50000000,1000,0,280,48,h,IntPtr.Zero,c.instance,IntPtr.Zero);
     if(composition) {
       var bridge=new Class { proc=callback, instance=c.instance, name="Windows.UI.Composition.DesktopWindowContentBridge" };
@@ -88,32 +88,39 @@ try {
     $right=[TestBar]::FindWindowExW($bar,[IntPtr]::Zero,'Button','Notification icons')
     $leftBefore=[TestBar]::Bounds($left)
     $rightBefore=[TestBar]::Bounds($right)
-    $appProcess=Start-Process -FilePath (Join-Path $PSScriptRoot '..\dist\sse-taskbar.exe') -WindowStyle Hidden -PassThru
+    $appProcess=Start-Process -FilePath (Join-Path $PSScriptRoot '..\dist\sse-taskbar.exe') -ArgumentList '--no-autostart' -WindowStyle Hidden -PassThru
     Wait-Until { $script:child=[TestBar]::Child($bar,'IndexTaskbarChild'); $script:child -ne [IntPtr]::Zero -and [TestBar]::IsWindowVisible($script:child) } 'No embedded child appeared (test requires an active market session)'
     if ([TestBar]::GetParent($child) -ne $bar) { throw 'Child parent mismatch' }
     $style=[TestBar]::GetWindowLongPtrW($child,-16).ToInt64()
     $extended=[TestBar]::GetWindowLongPtrW($child,-20).ToInt64()
     if (($style -band 0x40000000) -eq 0 -or ($style -band 0x80000000L) -ne 0 -or ($extended -band 8) -ne 0) { throw 'Not a normal embedded child' }
-    if ((($extended -band 0x80000) -ne 0) -ne $CompositionHost.IsPresent) { throw 'Wrong composition path selected' }
-    if ($CompositionHost) {
-        [uint32]$key=0; [byte]$alpha=0; [uint32]$flags=0
-        if (-not [TestBar]::GetLayeredWindowAttributes($child,[ref]$key,[ref]$alpha,[ref]$flags) -or $alpha -ne 255 -or ($flags -band 2) -eq 0) { throw 'Layered child is not opaque' }
-    }
+    if (($extended -band 0x80000) -eq 0) { throw 'Transparent child requires a layered surface on both hosts' }
+    [uint32]$key=0; [byte]$alpha=0; [uint32]$flags=0
+    if (-not [TestBar]::GetLayeredWindowAttributes($child,[ref]$key,[ref]$alpha,[ref]$flags) -or $key -ne 0x010101 -or $flags -ne 1) { throw 'Child background transparency is not configured' }
     # Simulate Explorer raising a sibling without moving the ticker.
     [void][TestBar]::SetWindowPos($left,[IntPtr]::Zero,0,0,0,0,0x13)
     Wait-Until { [TestBar]::IsWindowVisible($child) -and [TestBar]::GetWindow($child,3) -eq [IntPtr]::Zero } 'Child did not recover its sibling Z order'
     if ([TestBar]::Bounds($left) -ne $leftBefore -or [TestBar]::Bounds($right) -ne $rightBefore) { throw 'System control geometry was modified' }
-    Wait-Until { ([TestBar]::Text($child) -split '\|').Count -eq 3 } 'Expected three visible indices in available space'
+    Wait-Until { ([TestBar]::Text($child) -split '\|').Count -ge 2 } 'Expected at least two measured-width indices'
+    # Find a two-item gap without assuming fixed text widths or a particular market.
+    $foundPair=$false
+    for ($edge=420; $edge -le 900; $edge+=20) {
+        [void][TestBar]::MoveWindow($left,0,0,$edge,48,$true)
+        Start-Sleep -Milliseconds 800
+        if ([TestBar]::IsWindowVisible($child) -and ([TestBar]::Text($child) -split '\|').Count -eq 2) {
+            $foundPair=$true
+            break
+        }
+    }
+    if (-not $foundPair) { throw 'Could not find a two-item gap with measured widths' }
     $first=([TestBar]::Text($child) -split ' ')[0]
     Wait-Until { ([TestBar]::Text($child) -split ' ')[0] -ne $first } 'Carousel did not advance'
-    [void][TestBar]::MoveWindow($left,0,0,600,48,$true)
-    Wait-Until { [TestBar]::IsWindowVisible($child) -and ([TestBar]::Text($child) -split '\|').Count -eq 2 } 'Expected two visible indices after gap shrinks'
     $first=([TestBar]::Text($child) -split ' ')[0]
     [void][TestBar]::PostMessageW($child,522,[IntPtr](120 -shl 16),[IntPtr]::Zero)
     Wait-Until { ([TestBar]::Text($child) -split ' ')[0] -ne $first } 'Mouse wheel did not change page'
-    [void][TestBar]::MoveWindow($left,0,0,780,48,$true)
-    Wait-Until { -not [TestBar]::IsWindowVisible($child) } 'A gap fitting only one index should hide the child'
-    [void][TestBar]::MoveWindow($left,0,0,300,48,$true)
+    [void][TestBar]::MoveWindow($left,0,0,980,48,$true)
+    Wait-Until { -not [TestBar]::IsWindowVisible($child) } 'A gap too small for two indices should hide the child'
+    [void][TestBar]::MoveWindow($left,0,0,400,48,$true)
     Wait-Until { [TestBar]::IsWindowVisible($child) } 'Child did not return after gap became available'
     if ([TestBar]::Bounds($right) -ne $rightBefore) { throw 'Notification area moved' }
     [void][TestBar]::PostMessageW($bar,16,[IntPtr]::Zero,[IntPtr]::Zero)
