@@ -23,6 +23,7 @@ use windows_sys::{
     },
 };
 
+const PAGE_INTERVAL: Duration = Duration::from_millis(1500);
 const TRAY: u32 = WM_APP + 1;
 const LAYOUT_DIRTY: u32 = WM_APP + 2;
 static CONTROLLER: AtomicUsize = AtomicUsize::new(0);
@@ -165,7 +166,7 @@ pub fn run() {
             child: null_mut(),
             visible: 0,
             page: 0,
-            next_page: Instant::now() + Duration::from_secs(5),
+            next_page: Instant::now() + PAGE_INTERVAL,
             invalidated: Instant::now(),
             status: "正在检测任务栏空白区域".into(),
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
@@ -342,7 +343,7 @@ unsafe fn attach(ptr: *mut State) {
             format!("任务栏内显示全部{count}项")
         } else {
             format!(
-                "任务栏内显示{}项 / 共{count}项 · 5秒轮播 · 滚轮切换",
+                "任务栏内显示{}项 / 共{count}项 · 1.5秒轮播 · 滚轮切换",
                 placement.visible
             )
         };
@@ -400,7 +401,7 @@ unsafe fn menu(hwnd: HWND, ptr: *mut State) {
             DestroyWindow(hwnd);
         }
         4 => {
-            MessageBoxW(hwnd, w!("行情仅嵌入任务栏空白区域，不移动现有图标。\n空间不足时每5秒轮播，滚轮可切换。\nA股交易日09:30开始，收盘后保留至美股开盘。\n美股按美东09:30至16:00，提前收市日13:00结束。\n内置日历：A股2026；美股2026—2028。\n行情可能延迟，下方显示源行情时间。"), w!("指数行情"), MB_OK);
+            MessageBoxW(hwnd, w!("行情仅嵌入任务栏空白区域，不移动现有图标。\n空间不足时每1.5秒轮播，滚轮可切换。\nA股交易日09:30开始，收盘后保留至美股开盘。\n美股按美东09:30至16:00，提前收市日13:00结束。\n内置日历：A股2026；美股2026—2028。\n行情可能延迟，下方显示源行情时间。"), w!("指数行情"), MB_OK);
         }
         _ => {}
     }
@@ -457,7 +458,7 @@ unsafe fn advance(ptr: *mut State, direction: i32) {
     if let Some(session) = (*ptr).session {
         let count = quote::indices(session.market).len();
         (*ptr).page = ((*ptr).page as i32 + direction).rem_euclid(count as i32) as usize;
-        (*ptr).next_page = Instant::now() + Duration::from_secs(5);
+        (*ptr).next_page = Instant::now() + PAGE_INTERVAL;
         if !(*ptr).child.is_null() {
             InvalidateRect((*ptr).child, null(), 0);
         }
@@ -533,7 +534,7 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
                     advance(ptr, 1);
                 } else {
                     (*ptr).page = 0;
-                    (*ptr).next_page = Instant::now() + Duration::from_secs(5);
+                    (*ptr).next_page = Instant::now() + PAGE_INTERVAL;
                 }
             }
             attach(ptr);
