@@ -8,6 +8,7 @@ if (Test-Path -LiteralPath $localCargo) {
     $cargo = $localCargo
     $llvm = Get-ChildItem (Join-Path $PSScriptRoot '.tools\llvm') -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($llvm) {
+        $env:WINDRES = Join-Path $llvm.FullName 'bin\x86_64-w64-mingw32-windres.exe'
         $dlltool = Join-Path $llvm.FullName 'bin\llvm-dlltool.exe'
         $lld = Join-Path $env:RUSTUP_HOME 'toolchains\stable-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\rust-lld.exe'
         $env:CARGO_ENCODED_RUSTFLAGS = @('-C', ('dlltool=' + $dlltool), '-C', ('linker=' + $lld), '-C', 'linker-flavor=ld.lld') -join [char]31

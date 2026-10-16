@@ -31,6 +31,57 @@ pub struct Snapshot {
 }
 pub type Scan = Result<Snapshot, String>;
 
+pub unsafe fn has_composition_host(bar: HWND) -> bool {
+    unsafe extern "system" fn visit(hwnd: HWND, data: LPARAM) -> i32 {
+        let class = class_name(hwnd);
+        if matches!(
+            class.as_str(),
+            "Windows.UI.Composition.DesktopWindowContentBridge"
+                | "Microsoft.UI.Content.DesktopChildSiteBridge"
+                | "Windows.UI.Input.InputSite.WindowClass"
+        ) {
+            *(data as *mut bool) = true;
+            return 0;
+        }
+        1
+    }
+    let mut found = false;
+    EnumChildWindows(bar, Some(visit), &mut found as *mut bool as LPARAM);
+    found
+}
+
+unsafe fn class_name(hwnd: HWND) -> String {
+    let mut buf = [0u16; 256];
+    let len = GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+    String::from_utf16_lossy(&buf[..len.max(0) as usize])
+}
+
+unsafe fn native_report() -> String {
+    unsafe extern "system" fn visit(hwnd: HWND, data: LPARAM) -> i32 {
+        let output = &mut *(data as *mut String);
+        if output.len() > 32_768 {
+            return 0;
+        }
+        let mut r: RECT = std::mem::zeroed();
+        GetWindowRect(hwnd, &mut r);
+        output.push_str(&format!("class={} hwnd={:?} parent={:?} prev={:?} visible={} style={:#x} exstyle={:#x} rect={:?}\n",
+            class_name(hwnd), hwnd, GetParent(hwnd), GetWindow(hwnd, GW_HWNDPREV), IsWindowVisible(hwnd),
+            GetWindowLongPtrW(hwnd, GWL_STYLE), GetWindowLongPtrW(hwnd, GWL_EXSTYLE),
+            [r.left, r.top, r.right, r.bottom]));
+        1
+    }
+    let bar = FindWindowW(w!("Shell_TrayWnd"), null());
+    let mut report = format!(
+        "Composition host: {}\n",
+        !bar.is_null() && has_composition_host(bar)
+    );
+    if !bar.is_null() {
+        visit(bar, &mut report as *mut String as LPARAM);
+        EnumChildWindows(bar, Some(visit), &mut report as *mut String as LPARAM);
+    }
+    report
+}
+
 pub fn diagnose(path: &str) {
     let stop = Arc::new(AtomicBool::new(false));
     let rx = start(stop.clone());
@@ -39,7 +90,11 @@ pub fn diagnose(path: &str) {
     let session = crate::market::Calendar::load().map(|c| c.active(chrono::Utc::now()));
     let _ = std::fs::write(
         path,
-        format!("Session: {session:?}\nTaskbar: {report:#?}\n"),
+        format!(
+            "Version: {}\nSession: {session:?}\nTaskbar: {report:#?}\nNative windows:\n{}",
+            env!("CARGO_PKG_VERSION"),
+            unsafe { native_report() }
+        ),
     );
 }
 

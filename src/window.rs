@@ -269,8 +269,11 @@ unsafe fn attach(ptr: *mut State) {
         }
     }
     if (*ptr).child.is_null() {
+        // XAML taskbars use composition surfaces. Give our child its own redirected
+        // surface; classic taskbars retain the existing GDI child path.
+        let layered = taskbar::has_composition_host(bar);
         (*ptr).child = CreateWindowExW(
-            WS_EX_NOACTIVATE,
+            WS_EX_NOACTIVATE | if layered { WS_EX_LAYERED } else { 0 },
             w!("IndexTaskbarChild"),
             w!("指数行情"),
             WS_CHILD | WS_CLIPSIBLINGS,
@@ -283,6 +286,19 @@ unsafe fn attach(ptr: *mut State) {
             GetModuleHandleW(null()),
             ptr.cast(),
         );
+        if !(*ptr).child.is_null()
+            && layered
+            && SetLayeredWindowAttributes((*ptr).child, 0, 255, LWA_ALPHA) == 0
+        {
+            let error = GetLastError();
+            DestroyWindow((*ptr).child);
+            (*ptr).child = null_mut();
+            (*ptr).status = format!("子窗口合成失败（错误 {error}）");
+            if !previous.is_null() {
+                SetThreadDpiAwarenessContext(previous);
+            }
+            return;
+        }
     }
     if !(*ptr).child.is_null() {
         (*ptr).visible = placement.visible;
@@ -290,12 +306,13 @@ unsafe fn attach(ptr: *mut State) {
         let mut current: RECT = std::mem::zeroed();
         GetWindowRect((*ptr).child, &mut current);
         if IsWindowVisible((*ptr).child) == 0
+            || !GetWindow((*ptr).child, GW_HWNDPREV).is_null()
             || current.left != rect.left + placement.x
             || current.top != rect.top + y
             || current.right - current.left != placement.width
             || current.bottom - current.top != height
         {
-            SetWindowPos(
+            let positioned = SetWindowPos(
                 (*ptr).child,
                 HWND_TOP,
                 placement.x,
@@ -304,6 +321,14 @@ unsafe fn attach(ptr: *mut State) {
                 height,
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
             );
+            if positioned == 0 {
+                let error = GetLastError();
+                hide(ptr, &format!("子窗口定位失败（错误 {error}）"));
+                if !previous.is_null() {
+                    SetThreadDpiAwarenessContext(previous);
+                }
+                return;
+            }
         }
         (*ptr).status = if placement.visible == count {
             format!("任务栏内显示全部{count}项")
@@ -315,7 +340,7 @@ unsafe fn attach(ptr: *mut State) {
         };
         InvalidateRect((*ptr).child, null(), 0);
     } else {
-        (*ptr).status = "嵌入失败；未启用覆盖窗口".into();
+        (*ptr).status = format!("嵌入失败（错误 {}）", GetLastError());
     }
     if !previous.is_null() {
         SetThreadDpiAwarenessContext(previous);

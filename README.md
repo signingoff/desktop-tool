@@ -28,6 +28,8 @@ A股显示上证、创业板、深成指、科创50、北证50；美股显示纳
 
 安装 Rust 和对应 Windows 工具链后，在项目目录运行：
 
+GNU 工具链还需要 `windres`（可通过 `WINDRES` 环境变量指定路径）编译应用兼容性清单；MSVC 使用链接器嵌入清单。
+
 ```powershell
 cargo test
 cargo build --release
@@ -54,6 +56,10 @@ Windows 11没有官方的任意任务栏组件扩展接口，这种子窗口嵌�
 相关API：[Win32父子窗口关系](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setparent)、[UI Automation](https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/UI/Accessibility/struct.IUIAutomation.html)。
 
 ## 验证记录
+
+0.2.1 针对“托盘显示已嵌入、实际看不到行情”增加兼容性处理：识别到 XAML 原生宿主时使用不透明的 layered 子窗口，嵌入 Windows 10/11 兼容性清单；经典任务栏保留原绘制方式。窗口位置不变但被其他同级窗口压到后面时，恢复自身的子窗口层级；定位或合成失败会显示错误码。实现依据：[Microsoft layered 子窗口及兼容性清单说明](https://learn.microsoft.com/en-us/windows/win32/winmsg/using-windows#using-layered-windows)。这是一版待 Windows 11 实机复测的修复，不代表已确认用户机器上的根因。
+
+诊断文件增加版本号、原生窗口类名、样式、父窗口、前序同级窗口和可见状态，不读取窗口标题。复测时先退出旧版，运行新版；若仍显示状态正常但没有行情，请保持新版运行，另开 PowerShell 执行上述 `--diagnose` 命令。模拟宿主测试可分别运行 `./tests/taskbar-host.ps1` 和 `./tests/taskbar-host.ps1 -CompositionHost`；后者只模拟宿主识别、layered 属性和层级恢复，不等同于真实 XAML 合成测试。
 
 2026-10-16：10项离线测试通过，覆盖空白区域布局、拥挤时隐藏、重叠控件边界、DPI比例、轮播覆盖，以及原有8指数样本、行情校验、交易日和夏令时。真实行情网络测试可单独运行 `cargo test -- --ignored`，要求当天已有A股行情。便携GNU构建使用LLD链接器，避免当前工具链旧GNU链接器生成程序启动异常。
 
