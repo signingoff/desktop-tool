@@ -1,6 +1,7 @@
 use crate::{
     layout,
     market::{Calendar, Session},
+    palette::{self, Palette},
     quote::{self, Quotes},
     taskbar::{self, Scan, Snapshot},
 };
@@ -49,6 +50,8 @@ struct State {
     invalidated: Instant,
     status: String,
     taskbar_created: u32,
+    palette: Palette,
+    color_checked: Option<Instant>,
 }
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
@@ -153,6 +156,8 @@ pub fn run() {
             invalidated: Instant::now(),
             status: "正在检测任务栏空白区域".into(),
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
+            palette: palette::LIGHT_TEXT,
+            color_checked: None,
         });
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
         CONTROLLER.store(hwnd as usize, Ordering::Relaxed);
@@ -203,6 +208,60 @@ unsafe fn hide(ptr: *mut State, reason: &str) {
     if !child.is_null() && IsWindow(child) != 0 {
         ShowWindow(child, SW_HIDE);
     }
+}
+
+unsafe fn sample_taskbar(
+    bar: HWND,
+    child: HWND,
+    rect: &RECT,
+    placement: layout::Placement,
+    dpi: i32,
+) -> Vec<u32> {
+    // Screen pixels include the actual acrylic/wallpaper tint, unlike a guessed
+    // Windows theme color. Only sample the verified blank margins beside us.
+    let previous = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    let mut old: RECT = std::mem::zeroed();
+    let exclude_child =
+        !child.is_null() && IsWindowVisible(child) != 0 && GetWindowRect(child, &mut old) != 0;
+    let dc = GetDC(null_mut());
+    let mut samples = Vec::new();
+    if !dc.is_null() {
+        let offset = (4 * dpi / 96).max(1);
+        for x in [
+            rect.left + placement.x - offset,
+            rect.left + placement.x + placement.width + offset,
+        ] {
+            for fraction in [1, 2, 3] {
+                let y = rect.top + (rect.bottom - rect.top) * fraction / 4;
+                if x < rect.left
+                    || x >= rect.right
+                    || y < rect.top
+                    || y >= rect.bottom
+                    || (exclude_child
+                        && x >= old.left
+                        && x < old.right
+                        && y >= old.top
+                        && y < old.bottom)
+                {
+                    continue;
+                }
+                // Ignore menus, other apps or lock-screen surfaces covering the taskbar.
+                let hit = WindowFromPoint(POINT { x, y });
+                if hit.is_null() || GetAncestor(hit, GA_ROOT) != bar {
+                    continue;
+                }
+                let color = GetPixel(dc, x, y);
+                if color != CLR_INVALID {
+                    samples.push(color);
+                }
+            }
+        }
+        ReleaseDC(null_mut(), dc);
+    }
+    if !previous.is_null() {
+        SetThreadDpiAwarenessContext(previous);
+    }
+    samples
 }
 
 unsafe fn attach(ptr: *mut State) {
@@ -265,6 +324,20 @@ unsafe fn attach(ptr: *mut State) {
     if height < 24 {
         hide(ptr, "任务栏高度不足");
         return;
+    }
+    if (*ptr)
+        .color_checked
+        .is_none_or(|checked| checked.elapsed() >= Duration::from_secs(1))
+    {
+        (*ptr).color_checked = Some(Instant::now());
+        let samples = sample_taskbar(bar, (*ptr).child, &rect, placement, dpi);
+        let palette = palette::choose(&samples, (*ptr).palette);
+        if palette != (*ptr).palette {
+            (*ptr).palette = palette;
+            if !(*ptr).child.is_null() {
+                InvalidateRect((*ptr).child, null(), 0);
+            }
+        }
     }
     // Cross-process child creation uses the parent's DPI context. No SetParent fallback.
     let previous = SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(bar));
@@ -546,6 +619,7 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
             0
         }
         LAYOUT_DIRTY | WM_DISPLAYCHANGE | WM_SETTINGCHANGE => {
+            (*ptr).color_checked = None;
             (*ptr).invalidated = Instant::now();
             hide(ptr, "任务栏布局变化，重新检测");
             0
@@ -725,13 +799,13 @@ fn quote_line(state: &State, session: Session, i: usize) -> (String, u32) {
     match q {
         Some(q) => {
             let color = if state.error.is_some() {
-                0x00909090
+                state.palette.muted
             } else if q.percent > 0.0 {
-                0x00AAAAFF // RGB(255, 170, 170): brighter red on a dark taskbar.
+                state.palette.up
             } else if q.percent < 0.0 {
-                0x00A0F279 // RGB(121, 242, 160): brighter green on a dark taskbar.
+                state.palette.down
             } else {
-                0x00EEEEEE
+                state.palette.neutral
             };
             (
                 format!(
@@ -754,7 +828,7 @@ fn quote_line(state: &State, session: Session, i: usize) -> (String, u32) {
                     .or_else(|| state.quotes.get(i).and_then(|q| q.as_ref().err().cloned()))
                     .unwrap_or("等待当天行情".into())
             ),
-            0x00AAAAAA,
+            state.palette.muted,
         ),
     }
 }

@@ -2,6 +2,7 @@
 
 mod layout;
 mod market;
+mod palette;
 mod quote;
 #[cfg(windows)]
 mod startup;
