@@ -106,13 +106,13 @@ try {
     Wait-Until { ([TestBar]::Text($child) -split '\|').Count -eq 3 } 'Expected three visible indices in available space'
     $first=([TestBar]::Text($child) -split ' ')[0]
     Wait-Until { ([TestBar]::Text($child) -split ' ')[0] -ne $first } 'Carousel did not advance'
-    [void][TestBar]::MoveWindow($left,0,0,780,48,$true)
-    Wait-Until { [TestBar]::IsWindowVisible($child) -and ([TestBar]::Text($child) -split '\|').Count -eq 1 } 'Expected one visible index after gap shrinks'
+    [void][TestBar]::MoveWindow($left,0,0,600,48,$true)
+    Wait-Until { [TestBar]::IsWindowVisible($child) -and ([TestBar]::Text($child) -split '\|').Count -eq 2 } 'Expected two visible indices after gap shrinks'
     $first=([TestBar]::Text($child) -split ' ')[0]
     [void][TestBar]::PostMessageW($child,522,[IntPtr](120 -shl 16),[IntPtr]::Zero)
     Wait-Until { ([TestBar]::Text($child) -split ' ')[0] -ne $first } 'Mouse wheel did not change page'
-    [void][TestBar]::MoveWindow($left,0,0,950,48,$true)
-    Wait-Until { -not [TestBar]::IsWindowVisible($child) } 'Crowded taskbar should hide the child'
+    [void][TestBar]::MoveWindow($left,0,0,780,48,$true)
+    Wait-Until { -not [TestBar]::IsWindowVisible($child) } 'A gap fitting only one index should hide the child'
     [void][TestBar]::MoveWindow($left,0,0,300,48,$true)
     Wait-Until { [TestBar]::IsWindowVisible($child) } 'Child did not return after gap became available'
     if ([TestBar]::Bounds($right) -ne $rightBefore) { throw 'Notification area moved' }

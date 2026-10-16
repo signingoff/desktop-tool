@@ -39,7 +39,7 @@ pub fn place(
     for span in spans {
         let available = span.start - cursor;
         let visible = ((available.max(0) / cell) as usize).min(count);
-        if visible > 0 && best.is_none_or(|p: Placement| visible >= p.visible) {
+        if visible >= 2 && best.is_none_or(|p: Placement| visible >= p.visible) {
             let width = visible as i32 * cell;
             best = Some(Placement {
                 x: span.start - width,
@@ -88,6 +88,9 @@ mod tests {
     }
     #[test]
     fn crowded_and_invalid_layouts_hide() {
+        // A gap that fits only one index must not produce a one-item ticker.
+        assert!(place(395, &[], 190, 5, 8).is_none());
+        assert_eq!(place(396, &[], 190, 5, 8).unwrap().visible, 2);
         assert!(place(800, &[Span { start: 0, end: 800 }], 190, 5, 8).is_none());
         assert!(place(
             200,

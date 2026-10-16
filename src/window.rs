@@ -251,7 +251,7 @@ unsafe fn attach(ptr: *mut State) {
         count,
         8 * snapshot.dpi as i32 / 96,
     ) else {
-        hide(ptr, "任务栏空白不足一项，暂停显示");
+        hide(ptr, "任务栏空白不足两项，暂停显示");
         return;
     };
     let height = (40 * snapshot.dpi as i32 / 96).min(rect.bottom - rect.top);
